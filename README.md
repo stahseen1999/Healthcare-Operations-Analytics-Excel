@@ -68,8 +68,7 @@ The final dashboard provides:
 - Interactive slicers for department, insurance type, gender, visit type and appointment status
 
 ### Dashboard Preview
-
-_Add the final dashboard screenshot here._
+<img width="940" height="648" alt="image" src="https://github.com/user-attachments/assets/5f7b3954-64ef-4e4a-9f87-03b82e6bac7c" />
 
 ## Automation
 
@@ -106,6 +105,6 @@ Healthcare-Operations-Analytics/
 
 The dataset is **synthetic and contains no real patient information**. It was created specifically for portfolio and demonstration purposes.
 
-## Interview Summary
+## Project Summary
 
 **I built an end-to-end healthcare operations analytics solution in Excel, starting from raw data auditing and Power Query transformations through Power Pivot data modeling and DAX-based KPI development. I then built an interactive dashboard with slicers and added VBA automation for refresh, filter reset, and PDF export. The project demonstrates both technical Excel capabilities and business-focused analytical thinking.**
