@@ -1,0 +1,704 @@
+============================================================
+HEALTHCARE OPERATIONS ANALYTICS
+POWER QUERY (M) TRANSFORMATION DOCUMENTATION
+============================================================
+
+Project:
+Healthcare Operations Analytics
+
+Purpose:
+This document contains the Power Query transformations used
+to clean, standardize, validate, and prepare the healthcare
+operations data for analytical reporting in Excel Power Pivot.
+
+The transformation layer separates raw source data from the
+clean analytical tables used by the dashboard.
+
+============================================================
+DATA FLOW
+============================================================
+
+Raw Excel Tables
+       |
+       v
+Power Query
+       |
+       +--> Visits_Clean
+       |
+       +--> Billing_Clean
+       |
+       +--> Patients_Clean
+       |
+       +--> Doctors_Clean
+       |
+       +--> Dim_Date
+       |
+       v
+Excel Data Model / Power Pivot
+       |
+       v
+DAX Measures
+       |
+       v
+PivotTables / PivotCharts
+       |
+       v
+Healthcare Operations Dashboard
+
+
+============================================================
+1. Visits_Clean
+============================================================
+
+Purpose:
+Clean and standardize visit-level healthcare operational data.
+
+Key transformations:
+
+- Trim unnecessary whitespace from text fields.
+- Standardize Department values.
+- Standardize Appointment_Status values.
+- Validate Wait_Time_Minutes.
+- Identify and handle invalid negative wait times.
+- Validate Patient_Satisfaction scores.
+- Keep valid satisfaction scores within the expected 1–5 range.
+- Standardize date fields.
+- Preserve the Visit_ID as the unique visit identifier.
+- Prepare the table for analytical reporting.
+
+Business importance:
+
+This table is the primary source for visit volume, completion,
+no-show, cancellation, waiting-time, and patient-satisfaction
+analysis.
+
+
+------------------------------------------------------------
+M CODE
+------------------------------------------------------------
+
+let
+    Source = Excel.CurrentWorkbook(){[Name="tblVisitsRaw"]}[Content],
+
+    #"Changed Types" =
+        Table.TransformColumnTypes(
+            Source,
+            {
+                {"Visit_ID", type text},
+                {"Patient_ID", type text},
+                {"Doctor_ID", type text},
+                {"Visit_Date", type date},
+                {"Visit_Type", type text},
+                {"Department", type text},
+                {"Diagnosis", type text},
+                {"Appointment_Status", type text},
+                {"Wait_Time_Minutes", Int64.Type},
+                {"Consultation_Fee", type number},
+                {"Patient_Satisfaction", type number}
+            }
+        ),
+
+    #"Trimmed Text" =
+        Table.TransformColumns(
+            #"Changed Types",
+            {
+                {"Department", Text.Trim, type text},
+                {"Appointment_Status", Text.Trim, type text},
+                {"Visit_Type", Text.Trim, type text}
+            }
+        ),
+
+    #"Standardized Department" =
+        Table.TransformColumns(
+            #"Trimmed Text",
+            {
+                {"Department", each Text.Proper(_), type text}
+            }
+        ),
+
+    #"Standardized Status" =
+        Table.TransformColumns(
+            #"Standardized Department",
+            {
+                {"Appointment_Status", each Text.Proper(_), type text}
+            }
+        ),
+
+    #"Fixed Wait Time" =
+        Table.TransformColumns(
+            #"Standardized Status",
+            {
+                {"Wait_Time_Minutes", each if _ < 0 then 0 else _, Int64.Type}
+            }
+        ),
+
+    #"Valid Satisfaction" =
+        Table.TransformColumns(
+            #"Fixed Wait Time",
+            {
+                {
+                    "Patient_Satisfaction",
+                    each
+                        if _ = null then null
+                        else if _ > 5 then 5
+                        else if _ < 1 then 1
+                        else _,
+                    type number
+                }
+            }
+        ),
+
+    #"Added Month" =
+        Table.AddColumn(
+            #"Valid Satisfaction",
+            "Month",
+            each Date.ToText([Visit_Date], "MMM"),
+            type text
+        ),
+
+    #"Added YearMonth" =
+        Table.AddColumn(
+            #"Added Month",
+            "YearMonth",
+            each Date.ToText([Visit_Date], "yyyy-MM"),
+            type text
+        )
+in
+    #"Added YearMonth"
+
+
+============================================================
+2. Billing_Clean
+============================================================
+
+Purpose:
+Clean billing information and prepare revenue data for
+financial and departmental analysis.
+
+Key transformations:
+
+- Standardize Payment_Mode values.
+- Validate billing amounts.
+- Validate discount values.
+- Identify invalid or negative discount values.
+- Standardize Bill_Date.
+- Preserve Visit_ID and Patient_ID relationships.
+- Merge with Visits_Clean using Visit_ID.
+- Bring Doctor_ID from Visits_Clean into the billing dataset.
+- Create/retain the clean net revenue field used by the Data Model.
+
+Business importance:
+
+The cleaned billing table supports total revenue, revenue by
+department, revenue by doctor, insurance analysis, and revenue
+per completed visit.
+
+
+------------------------------------------------------------
+M CODE
+------------------------------------------------------------
+
+let
+    Source = Excel.CurrentWorkbook(){[Name="tblBillingRaw"]}[Content],
+
+    #"Changed Types" =
+        Table.TransformColumnTypes(
+            Source,
+            {
+                {"Bill_ID", type text},
+                {"Visit_ID", type text},
+                {"Patient_ID", type text},
+                {"Bill_Date", type date},
+                {"Consultation_Amount", type number},
+                {"Lab_Amount", type number},
+                {"Medicine_Amount", type number},
+                {"Gross_Amount", type number},
+                {"Discount", type number},
+                {"Net_Revenue", type number},
+                {"Payment_Mode", type text},
+                {"Payment_Status", type text}
+            }
+        ),
+
+    #"Trimmed Text" =
+        Table.TransformColumns(
+            #"Changed Types",
+            {
+                {"Payment_Mode", Text.Trim, type text},
+                {"Payment_Status", Text.Trim, type text}
+            }
+        ),
+
+    #"Standardized Payment Mode" =
+        Table.TransformColumns(
+            #"Trimmed Text",
+            {
+                {"Payment_Mode", Text.Upper, type text}
+            }
+        ),
+
+    #"Fixed Discount" =
+        Table.TransformColumns(
+            #"Standardized Payment Mode",
+            {
+                {"Discount", each if _ < 0 then 0 else _, type number}
+            }
+        ),
+
+    #"Recalculated Revenue" =
+        Table.AddColumn(
+            #"Fixed Discount",
+            "Net_Revenue_Clean",
+            each [Gross_Amount] - [Discount],
+            type number
+        )
+in
+    #"Recalculated Revenue"
+
+
+============================================================
+3. Patients_Clean
+============================================================
+
+Purpose:
+Prepare a clean patient dimension for demographic and
+patient-level analysis.
+
+Key transformations:
+
+- Standardize Gender values.
+- Standardize City values.
+- Remove unnecessary whitespace.
+- Handle missing or invalid demographic values.
+- Preserve Patient_ID as the patient identifier.
+- Prepare the table as a dimension in the Data Model.
+
+Business importance:
+
+This table supports patient-level filtering and demographic
+analysis while avoiding duplication of patient attributes
+inside transactional visit and billing tables.
+
+
+------------------------------------------------------------
+M CODE
+------------------------------------------------------------
+
+let
+    Source = Excel.CurrentWorkbook(){[Name="tblPatientsRaw"]}[Content],
+
+    #"Changed Types" =
+        Table.TransformColumnTypes(
+            Source,
+            {
+                {"Patient_ID", type text},
+                {"Patient_Name", type text},
+                {"Gender", type text},
+                {"Date_of_Birth", type date},
+                {"City", type text},
+                {"Insurance_Type", type text},
+                {"Registration_Date", type date}
+            }
+        ),
+
+    #"Trimmed Text" =
+        Table.TransformColumns(
+            #"Changed Types",
+            {
+                {"Patient_ID", Text.Trim, type text},
+                {"Patient_Name", Text.Trim, type text},
+                {"Gender", Text.Trim, type text},
+                {"City", Text.Trim, type text},
+                {"Insurance_Type", Text.Trim, type text}
+            }
+        ),
+
+    #"Standardized City" =
+        Table.TransformColumns(
+            #"Trimmed Text",
+            {
+                {"City", Text.Proper, type text}
+            }
+        ),
+
+    #"Standardized Insurance" =
+        Table.TransformColumns(
+            #"Standardized City",
+            {
+                {"Insurance_Type", Text.Proper, type text}
+            }
+        )
+in
+    #"Standardized Insurance"
+
+
+============================================================
+4. Doctors_Clean
+============================================================
+
+Purpose:
+Prepare a clean doctor dimension for provider-level analysis.
+
+Key transformations:
+
+- Standardize Doctor_ID.
+- Standardize Doctor_Name.
+- Standardize Department values.
+- Remove unnecessary whitespace.
+- Preserve Doctor_ID as the unique doctor identifier.
+- Prepare the table for relationships with visit and billing
+  fact tables.
+
+Business importance:
+
+This dimension supports doctor performance analysis including
+completed visits, average wait time, patient satisfaction,
+and revenue.
+
+
+------------------------------------------------------------
+M CODE
+------------------------------------------------------------
+
+let
+    Source = Excel.CurrentWorkbook(){[Name="tblDoctorsRaw"]}[Content],
+
+    #"Changed Types" =
+        Table.TransformColumnTypes(
+            Source,
+            {
+                {"Doctor_ID", type text},
+                {"Doctor_Name", type text},
+                {"Department", type text},
+                {"Experience_Years", Int64.Type},
+                {"Consultation_Fee", type number}
+            }
+        ),
+
+    #"Trimmed Text" =
+        Table.TransformColumns(
+            #"Changed Types",
+            {
+                {"Doctor_ID", Text.Trim, type text},
+                {"Doctor_Name", Text.Trim, type text},
+                {"Department", Text.Trim, type text}
+            }
+        ),
+
+    #"Standardized Department" =
+        Table.TransformColumns(
+            #"Trimmed Text",
+            {
+                {"Department", Text.Proper, type text}
+            }
+        ),
+
+    #"Validated Experience" =
+        Table.TransformColumns(
+            #"Standardized Department",
+            {
+                {
+                    "Experience_Years",
+                    each if _ < 0 then 0 else _,
+                    Int64.Type
+                }
+            }
+        ),
+
+    #"Validated Consultation Fee" =
+        Table.TransformColumns(
+            #"Validated Experience",
+            {
+                {
+                    "Consultation_Fee",
+                    each if _ < 0 then 0 else _,
+                    type number
+                }
+            }
+        )
+in
+    #"Validated Consultation Fee"
+
+
+============================================================
+5. Dim_Date
+============================================================
+
+Purpose:
+Create a dedicated date dimension for time-based analysis.
+
+Key fields:
+
+- Date
+- Year
+- Month
+- Month Number
+- YearMonth
+- Other calendar attributes required for reporting
+
+Business importance:
+
+The date dimension enables consistent time-based analysis
+across visits and billing data.
+
+It is used for:
+
+- Monthly visit trends
+- Monthly revenue trends
+- Year/month filtering
+- Time-based dashboard analysis
+
+
+------------------------------------------------------------
+M CODE
+------------------------------------------------------------
+
+let
+    StartDate = #date(2025, 1, 1),
+    EndDate = #date(2025, 12, 31),
+
+    NumberOfDays =
+        Duration.Days(EndDate - StartDate) + 1,
+
+    DateList =
+        List.Dates(
+            StartDate,
+            NumberOfDays,
+            #duration(1, 0, 0, 0)
+        ),
+
+    DateTable =
+        Table.FromList(
+            DateList,
+            Splitter.SplitByNothing(),
+            {"Date"}
+        ),
+
+    ChangedType =
+        Table.TransformColumnTypes(
+            DateTable,
+            {{"Date", type date}}
+        ),
+
+    AddedYear =
+        Table.AddColumn(
+            ChangedType,
+            "Year",
+            each Date.Year([Date]),
+            Int64.Type
+        ),
+
+    AddedMonthNumber =
+        Table.AddColumn(
+            AddedYear,
+            "Month_Number",
+            each Date.Month([Date]),
+            Int64.Type
+        ),
+
+    AddedMonth =
+        Table.AddColumn(
+            AddedMonthNumber,
+            "Month",
+            each Date.ToText([Date], "MMM"),
+            type text
+        ),
+
+    AddedYearMonth =
+        Table.AddColumn(
+            AddedMonth,
+            "YearMonth",
+            each Date.ToText([Date], "yyyy-MM"),
+            type text
+        ),
+
+    AddedQuarter =
+        Table.AddColumn(
+            AddedYearMonth,
+            "Quarter",
+            each "Q" & Text.From(Date.QuarterOfYear([Date])),
+            type text
+        ),
+
+    AddedDay =
+        Table.AddColumn(
+            AddedQuarter,
+            "Day",
+            each Date.Day([Date]),
+            Int64.Type
+        ),
+
+    AddedDayName =
+        Table.AddColumn(
+            AddedDay,
+            "Day_Name",
+            each Date.DayOfWeekName([Date]),
+            type text
+        )
+in
+    AddedDayName
+
+
+============================================================
+6. DATA QUALITY RULES
+============================================================
+
+The Power Query layer was designed to address the following
+data-quality issues identified during the audit:
+
+1. Whitespace inconsistencies
+2. Inconsistent text casing
+3. Invalid negative wait times
+4. Satisfaction scores outside the expected 1–5 range
+5. Inconsistent payment-mode values
+6. Invalid/negative discount values
+7. City-name formatting inconsistencies
+8. Missing values
+9. Date-format consistency
+10. Relationship consistency between transactional tables
+    and dimension tables
+
+
+============================================================
+7. ANALYTICAL TABLE DESIGN
+============================================================
+
+Dimension Tables:
+
+- Dim_Date
+- Dim_Patient
+- Dim_Doctor
+
+Fact Tables:
+
+- Fact_Visits
+- Fact_Billing
+
+The model follows a fact-and-dimension structure so that
+transactional measures can be analyzed using descriptive
+dimensions.
+
+
+============================================================
+8. IMPORTANT RELATIONSHIPS
+============================================================
+
+Dim_Date[Date]
+        |
+        +---- Fact_Visits[Visit_Date]
+        |
+        +---- Fact_Billing[Bill_Date]
+
+
+Dim_Doctor[Doctor_ID]
+        |
+        +---- Fact_Visits[Doctor_ID]
+        |
+        +---- Fact_Billing[Doctor_ID]
+
+
+Dim_Patient[Patient_ID]
+        |
+        +---- Fact_Visits[Patient_ID]
+        |
+        +---- Fact_Billing[Patient_ID]
+
+
+Fact_Visits[Visit_ID]
+        |
+        +---- Fact_Billing[Visit_ID]
+
+
+============================================================
+9. REVENUE MODELING NOTE
+============================================================
+
+Billing data was initially independent of department-level
+analysis.
+
+To correctly analyze revenue by department and doctor, the
+Billing_Clean query was merged with Visits_Clean using
+Visit_ID.
+
+Doctor_ID was then brought into the billing data.
+
+This allows:
+
+Billing
+   |
+Visit_ID
+   |
+Visits
+   |
+Doctor_ID
+   |
+Doctor
+   |
+Department
+
+As a result, revenue can be correctly attributed to the
+corresponding doctor and department without repeating the
+overall revenue amount across every department.
+
+
+============================================================
+10. POWER QUERY DESIGN PRINCIPLE
+============================================================
+
+Raw data is not directly used for dashboard calculations.
+
+Instead:
+
+RAW DATA
+   ↓
+DATA AUDIT
+   ↓
+POWER QUERY CLEANING
+   ↓
+CLEAN ANALYTICAL TABLES
+   ↓
+POWER PIVOT DATA MODEL
+   ↓
+DAX MEASURES
+   ↓
+PIVOTTABLES / PIVOTCHARTS
+   ↓
+DASHBOARD
+
+
+This separation improves:
+
+- Data quality
+- Maintainability
+- Reusability
+- Analytical consistency
+- Dashboard reliability
+
+
+============================================================
+11. OUTPUT
+============================================================
+
+Power Query prepares the cleaned data used by the Excel
+Data Model and dashboard.
+
+The resulting analytical model supports:
+
+- Total Visits
+- Completed Visits
+- No Show Rate
+- Cancellation Rate
+- Average Wait Time
+- Average Patient Satisfaction
+- Total Revenue
+- Revenue per Completed Visit
+- Unique Patients
+- Department Performance
+- Doctor Performance
+- Insurance Performance
+- Monthly Performance
+
+
+============================================================
+END OF DOCUMENT
+============================================================
